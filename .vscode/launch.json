@@ -1,0 +1,199 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: unzip.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/data_preparation/unzip.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--src", "/home/pieter/Downloads",
+                "--dst", "./data",
+            ]
+        },
+        {
+            "name": "Python: pcd_from_sfm.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/data_preparation/pcd_from_sfm.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--src", "./data/3DPotatoTwin/2_SfM/1_mesh/",
+                "--dst", "./data/potato",
+            ]
+        },
+        {
+            "name": "Python: augment.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/data_preparation/augment.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--json_config_filename", "./data_preparation/augment.json",
+                "--src", "./data/potato",
+                "--dst", "./data/potato_augmented",
+                // "--show_augmented_pointcloud"
+            ]
+        },
+        {
+            "name": "Python: prepare_deepsdf_training_data.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/data_preparation/prepare_deepsdf_training_data.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--src", "./data/potato",
+                // "--src", "./data/potato_augmented",
+                // "--show_input_points",
+                // "--show_sdf_points",
+            ]
+        },
+        {
+            "name": "Python: train_deep_sdf.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/train_deep_sdf.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--experiment", "./deepsdf/experiments/potato",
+            ]
+        },
+        {
+            "name": "Python: organize_data.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/data_preparation/organize_data.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--src", "./data/3DPotatoTwin/1_rgbd/1_image/",
+                "--dst", "./data/potato/",
+            ]
+        },
+        {
+            "name": "Python: copy_file.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/data_preparation/copy_file.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--src", "./data/potato_example/dataset.json",
+                "--dst", "./data/potato",
+                "--subdir", "",
+                // "--src", "./data/potato_example/tf/tf.npz",
+                // "--dst", "./data/potato",
+                // "--subdir", "tf",
+                // "--src", "./data/potato_example/tf/bounding_box.npz",
+                // "--dst", "./data/potato",
+                // "--subdir", "tf",
+                // "--src", "./data/potato_example/realsense/intrinsic.json",
+                // "--dst", "./data/potato",
+                // "--subdir", "realsense",
+            ]
+        },
+        {
+            "name": "Python: reconstruct_deep_sdf.py", //only for deepsdf without encoder
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/reconstruct_deep_sdf.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--experiment", "./deepsdf/experiments/potato_32",
+                "--data", "./data",
+                "--checkpoint_decoder", "130",
+                "--split", "./deepsdf/experiments/splits/potato_test.json",
+                // "--split", "./deepsdf/experiments/splits/potato_train_without_augmentations.json",
+            ]
+        },
+        {
+            "name": "Python: compute_reconstruction_metrics.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/compute_reconstruction_metrics.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--ground-truth-dir", "./data/potato/",
+                "--prediction-dir", "./deepsdf/experiments/potato_32/Reconstructions/130/Meshes/complete/test",
+            ]
+        },
+        {
+            "name": "Python: explore_latents.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/explore_latents.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--experiments", "./deepsdf/experiments/potato_8/", "./deepsdf/experiments/potato_16/", "./deepsdf/experiments/potato_32/", "./deepsdf/experiments/potato_64/", "./deepsdf/experiments/potato_128/", "./deepsdf/experiments/potato_256/",
+                "--checkpoints_decoder", "480", "330", "130", "250", "450", "550",
+                "--split", "./deepsdf/experiments/splits/potato_test.json",
+                "--latent_names", "5R2-3_374", "R12-8_373",
+                "--transformations", "[0, 0, 0]", "[0, -0.15, 0]", "[0, -0.3, 0]", "[0, -0.45, 0]", "[0, -0.6, 0]", "[0, -0.75, 0]",
+                "--colors", "[1, 0, 0]", "[0, 0, 1]", "[0, 1, 0]", "[1, 0.706, 0]", "[1, 0 , 0.706]", "[0, 0.706, 1]"
+            ]
+        },
+        {
+            "name": "Python: get_config_values.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/data_preparation/get_config_values.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--data_dir", "./data/potato/",
+                "--offset", "20",
+                "--split_file", "./data/potato/split.json",
+            ]
+        },
+        // before training the encoder: run the reconstruct_deep_sdf.py for train, validation and test set:
+        // python reconstruct_deep_sdf.py --experiment ./deepsdf/experiments/potato --data ./data --checkpoint 500 --split ./deepsdf/experiments/splits/potato_train_without_augmentations.json
+        // python reconstruct_deep_sdf.py --experiment ./deepsdf/experiments/potato --data ./data --checkpoint 500 --split ./deepsdf/experiments/splits/potato_val.json
+        // python reconstruct_deep_sdf.py --experiment ./deepsdf/experiments/potato --data ./data --checkpoint 500 --split ./deepsdf/experiments/splits/potato_test.json
+        {
+            "name": "Python: train.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/train.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--cfg", "./configs/super3d_32.json",
+                "--experiment", "./deepsdf/experiments/potato_32/",
+                "--checkpoint_decoder", "130",
+            ]
+        },
+        {
+            "name": "Python: test.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/test.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--cfg", "./deepsdf/experiments/potato_32/super3d_32.json",
+                "--experiment", "./deepsdf/experiments/potato_32/",
+                "--checkpoint_decoder", "130",
+            ]
+        },
+    ]
+}
