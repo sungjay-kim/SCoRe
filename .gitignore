@@ -1,7 +1,15 @@
 */__pycache__/
+**/__pycache__/
 *.pyc
+*.pyo
 *.npz
+*.npy
 *.pth
+*.pt
+*.ckpt
+*.png
+*.ply
+*.log
 data/
 deepsdf/experiments/
 cache/
@@ -11,6 +19,26 @@ potato/
 *~
 results/
 data_preparation/move.py
-prototype.py
 shape_completion_results.csv
-test_visualize.py
+.nfs*
+*.egg-info/
+
+# experiment outputs and archives
+experiments/
+experiments_archive_*/
+deepsdf/experiments_archive_*/
+**/_archive_*/
+**/_to_delete/
+/figures/
+
+# one-shot launchers and run logs
+scripts/*.sh
+scripts/*.out
+scripts/*.txt
+
+# baseline scratch work
+baselines/
+
+# README assets (override generic *.png / *.gif / figures/ rules above)
+!assets/
+!assets/**
