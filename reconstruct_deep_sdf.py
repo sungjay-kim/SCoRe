@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright 2004-present Facebook. All Rights Reserved.
-
+    
 import argparse
 import json
 import logging
@@ -23,6 +23,7 @@ def reconstruct(
     num_samples=30000,
     lr=5e-4,
     l2reg=False,
+    init_latent=None,
 ):
     def adjust_learning_rate(
         initial_lr, optimizer, num_iterations, decreased_by, adjust_lr_every
@@ -35,10 +36,11 @@ def reconstruct(
     decreased_by = 10
     adjust_lr_every = int(num_iterations / 2)
 
-    if type(stat) == type(0.1):
+    if init_latent is not None:
+        latent = init_latent.clone().detach().cuda().unsqueeze(0) if init_latent.dim() == 1 else init_latent.clone().detach().cuda()
+    elif type(stat) == type(0.1):
         latent = torch.ones(1, latent_size).normal_(mean=0, std=stat).cuda()
     else:
-        # latent = torch.normal(stat[0].detach(), stat[1].detach(), out=latent_size).cuda()
         latent = torch.empty(1, latent_size).normal_(mean=stat[0].detach(),std=stat[1].detach()).cuda()
 
     latent.requires_grad_(True)
@@ -59,7 +61,7 @@ def reconstruct(
 
         xyz = sdf_data[:, 0:3]
         
-        # centering
+        # # centering
         # center = torch.mean(xyz, axis=0)
         # xyz -= center
 
@@ -107,7 +109,7 @@ def list_depth_frames(data_source, split):
         for class_name in split[dataset]:
             for instance_name in split[dataset][class_name]:
                 
-                base_path = os.path.join(data_source,class_name,instance_name,'realsense/depth/')
+                base_path = os.path.join(data_source,class_name,instance_name,'orbbec/depth/')
                 base_dir = os.listdir(base_path)
                 base_dir.sort()
 
@@ -157,6 +159,13 @@ if __name__ == "__main__":
         help="The number of iterations of latent code optimization to perform.",
     )
     arg_parser.add_argument(
+        "--clamping_distance",
+        dest="clamp",
+        type=float,
+        default=None,
+        help="Override clamping distance used during reconstruction; defaults to value from specs.json.",
+    )
+    arg_parser.add_argument(
         "--skip",
         dest="skip",
         action="store_true",
@@ -173,6 +182,26 @@ if __name__ == "__main__":
         dest="depth",
         action="store_true",
         help="Use depth for recontructions.",
+    )
+    arg_parser.add_argument(
+        "--use_trained_init",
+        action="store_true",
+        help="Initialize latent codes from trained LatentCodes instead of random sampling.",
+    )
+    arg_parser.add_argument(
+        "--mesh_resolution",
+        "-N",
+        dest="mesh_N",
+        type=int,
+        default=192,
+        help="Grid resolution for mesh extraction (default: 192). Lower = faster.",
+    )
+    arg_parser.add_argument(
+        "--max_batch",
+        dest="max_batch",
+        type=int,
+        default=2**18,
+        help="Max batch size for SDF grid evaluation (default: 2^18=262144).",
     )
     deep_sdf.add_common_args(arg_parser)
 
@@ -200,10 +229,29 @@ if __name__ == "__main__":
         print('stats: ', mean, var)
         return mean, var
 
-    lat_vecs_trained, indices_trained = load_latents(args.experiment_directory, args.checkpoint)
-    emp_mean, emp_var = empirical_stat(lat_vecs_trained, indices_trained)
+    def _load_scale_table(csv_path):
+        table = {}
+        if not os.path.isfile(csv_path):
+            logging.warning("Scale CSV not found: %s", csv_path)
+            return table
+        try:
+            with open(csv_path, newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    label = row.get("label", "").strip()
+                    vol_str = row.get("volume_ml", None)
+                    if label and vol_str:
+                         try:
+                             table[label] = float(vol_str)
+                         except:
+                             pass
+        except Exception as e:
+            logging.warning("Error loading scale CSV: %s", e)
+        return table
 
     specs_filename = os.path.join(args.experiment_directory, "specs.json")
+
+    import csv
 
     if not os.path.isfile(specs_filename):
         raise Exception(
@@ -211,12 +259,32 @@ if __name__ == "__main__":
         )
 
     specs = json.load(open(specs_filename))
+    
+    # Disentangled Mode config
+    disentangled_cfg = specs.get("DisentangledMode", None)
+    use_disentangled = bool(disentangled_cfg and disentangled_cfg.get("Enabled", False))
+    
+    decoder_latent_size = specs["CodeLength"]
+    if use_disentangled:
+        decoder_latent_size = int(disentangled_cfg.get("ShapeDim", 28))
+    
+    lat_vecs_trained, indices_trained = load_latents(args.experiment_directory, args.checkpoint)
+    
+    # If using Disentangled Mode, slice the trained latents to keep only Shape component
+    if use_disentangled:
+        shape_dim = int(disentangled_cfg.get("ShapeDim", 28))
+        # lat_vecs_trained is a list of tensors [Tensor(32), Tensor(32)...]
+        # We need to slice each one
+        lat_vecs_trained = [l[:shape_dim] for l in lat_vecs_trained]
+        logging.info("Sliced trained latents to %d dimensions for stats", shape_dim)
+
+    emp_mean, emp_var = empirical_stat(lat_vecs_trained, indices_trained)
 
     arch = __import__("deepsdf.networks." + specs["NetworkArch"], fromlist=["Decoder"])
 
-    latent_size = specs["CodeLength"]
+    latent_size = decoder_latent_size
 
-    decoder = arch.Decoder(latent_size, **specs["NetworkSpecs"])
+    decoder = arch.Decoder(decoder_latent_size, **specs["NetworkSpecs"])
 
     decoder = torch.nn.DataParallel(decoder)
 
@@ -230,6 +298,20 @@ if __name__ == "__main__":
     decoder.load_state_dict(saved_model_state["model_state_dict"])
 
     decoder = decoder.module.cuda()
+
+    # Build sample_id -> trained latent lookup for --use_trained_init
+    trained_latent_lookup = {}
+    if args.use_trained_init:
+        train_split_path = specs.get("TrainSplit", None)
+        if train_split_path and os.path.isfile(train_split_path):
+            train_sample_ids = deep_sdf.data.get_instance_filenames(
+                args.data_source, json.load(open(train_split_path)))
+            # Extract sample ID from filename path (e.g. .../kmelon_centered/S1/laser/samples.npz -> S1)
+            for i, fn in enumerate(train_sample_ids):
+                sid = fn.split('/')[-3]
+                if i < len(lat_vecs_trained):
+                    trained_latent_lookup[sid] = lat_vecs_trained[i]
+            logging.info("Loaded %d trained latents for init", len(trained_latent_lookup))
 
     with open(args.split_filename, "r") as f:
         split = json.load(f)
@@ -286,7 +368,22 @@ if __name__ == "__main__":
 
     # TODO: testing only on some scans for now
     # npz_filenames = npz_filenames[:50]
+    # decide clamping distance: CLI override > specs.json > fallback 0.1
+    clamp_dist = args.clamp if args.clamp is not None else specs.get("ClampingDistance", 1)
+
+     # Load Scale Table if Disentangled
+    scale_table = {}
+    if use_disentangled:
+         tgt = disentangled_cfg.get("Target", {})
+         # Load base CSV first
+         if tgt.get("CsvPath"):
+              scale_table.update(_load_scale_table(tgt.get("CsvPath")))
+         # Load augmented CSV second (overwrites if duplicates, adds new)
+         if tgt.get("AugmentedCsvPath"):
+              scale_table.update(_load_scale_table(tgt.get("AugmentedCsvPath")))
+
     for ii, npz in enumerate(npz_filenames):
+
 
         print('\n', ii, '\n')
 
@@ -312,6 +409,25 @@ if __name__ == "__main__":
             results_filename = npz.split('/')[-4] + '_' + npz.split('/')[-1][:-4]
         else:
             results_filename = npz.split('/')[-3]
+        
+        # Disentangled Mode Scale Normalization
+        if use_disentangled:
+             instance_id = results_filename
+             vol = scale_table.get(instance_id)
+             if not vol and "_" in instance_id:
+                  vol = scale_table.get(instance_id.split("_")[0])
+             
+             scale_factor = 1.0
+             if vol:
+                  scale_factor = vol**(1.0/3.0)
+             else:
+                  logging.warning("Scale lookup failed for %s, using 1.0", instance_id)
+             
+             if scale_factor != 1.0:
+                 # data_sdf is [pos, neg]
+                 # We normalize in place (it was just loaded)
+                 data_sdf[0][:, 0:4] /= scale_factor
+                 data_sdf[1][:, 0:4] /= scale_factor
 
         for k in range(repeat):
 
@@ -328,11 +444,14 @@ if __name__ == "__main__":
                     reconstruction_codes_dir, results_filename + ".pth"
                 )
 
-            if (
-                args.skip
-                and os.path.isfile(mesh_filename + ".ply")
-                and os.path.isfile(latent_filename)
-            ):
+            mesh_output_path = (
+                mesh_filename if mesh_filename.endswith(".ply") else mesh_filename + ".ply"
+            )
+            
+            if os.path.isfile(mesh_output_path) and os.path.isfile(latent_filename):
+                logging.info(
+                    "mesh and latent already exist, skipping reconstruction: %s", mesh_output_path
+                )
                 continue
 
             logging.info("reconstructing {}".format(npz))
@@ -340,17 +459,23 @@ if __name__ == "__main__":
             data_sdf[0] = data_sdf[0][torch.randperm(data_sdf[0].shape[0])]
             data_sdf[1] = data_sdf[1][torch.randperm(data_sdf[1].shape[0])]
 
+            # Legacy size_val logic removed
+
+
             start = time.time()
+            # Use trained latent as init if available
+            _init_lat = trained_latent_lookup.get(results_filename, None) if args.use_trained_init else None
             err, latent = reconstruct(
                 decoder,
                 int(args.iterations),
                 latent_size,
                 data_sdf,
                 [emp_mean,emp_var],
-                1,
-                num_samples=32000,
-                lr=0.1,
-                l2reg=False,
+                clamp_dist,
+                num_samples=32000,  # 64000 is original, 32000 is new
+                lr=5e-4,
+                l2reg=True,
+                init_latent=_init_lat,
             )
             # total_rec_time += time.time() - start
             logging.info("reconstruct time: {}".format(time.time() - start))
@@ -366,24 +491,28 @@ if __name__ == "__main__":
                 if not os.path.exists(os.path.dirname(mesh_filename)):
                     os.makedirs(os.path.dirname(mesh_filename))
 
+            rec_sampling_time = 0.0
             if not save_latvec_only:
                 logging.info("saving: {}".format(mesh_filename))
                 with torch.no_grad():
                     # add file name to decide where to save
                     rec_sampling_time = deep_sdf.mesh.create_mesh(
-                        decoder, latent, mesh_filename, start=start, N=256, max_batch=int(2 ** 18)
+                        decoder, latent, mesh_filename, start=start, N=args.mesh_N, max_batch=args.max_batch
                     )
 
-                # logging.debug("total time: {}".format(time.time() - start))
+                    # logging.debug("total time: {}".format(time.time() - start))
 
             total_rec_time += rec_sampling_time
 
             if not os.path.exists(os.path.dirname(latent_filename)):
                 os.makedirs(os.path.dirname(latent_filename))
 
-            torch.save(latent.unsqueeze(0), latent_filename)
+            if not os.path.isfile(latent_filename):
+                torch.save(latent.unsqueeze(0), latent_filename)
         
         
     print()
     print()
     print('average reconstruction time: ', total_rec_time/len(npz_filenames))
+
+
