@@ -28,6 +28,14 @@ class ChamferDistance(Metrics3D):
         self.cd_array = []
 
     def compute(self, print_output=True):
+        if len(self.cd_array) == 0:
+            # No samples were processed (e.g., no prediction meshes found).
+            # Return NaN instead of crashing; callers can handle this case.
+            cd = float("nan")
+            if print_output:
+                print("chamfer distance: nan (no samples)")
+            return cd
+
         cd = sum(self.cd_array) / len(self.cd_array)
         if print_output:
             print('chamfer distance: {}'.format(cd))
