@@ -118,13 +118,15 @@ The PC1/PC2 growth axes are computed once per encoder by an offline PCA on withi
 
 210 oriental melon fruits across two seasons and three greenhouses at the Seongju Oriental Melon Research Institute, Korea:
 
-| Season | Greenhouse | Cultivar | Window | Fruits |
-|:---:|:---:|:---:|:---:|---:|
-| 2025 | B1 | *Eliteggul* | 1 May – 4 Jun 2025 | 61 |
-| 2026 | B3 | *Alchanggul* | 11 Mar – 16 Apr 2026 | 69 |
-| 2026 | B4 | *Alchanggul* | 11 Mar – 16 Apr 2026 | 80 |
+| Season | Greenhouse | Cultivar | Window | Fruits | Sample ids |
+|:---:|:---:|:---:|:---:|---:|:---:|
+| 2025 | A | *Eliteggul* | 1 May – 4 Jun 2025 | 61 | `A1`–`A61` |
+| 2026 | B | *Alchanggul* | 11 Mar – 16 Apr 2026 | 69 | `B1`–`B69` |
+| 2026 | C | *Alchanggul* | 11 Mar – 16 Apr 2026 | 80 | `C1`–`C80` |
 
-Split: 102 train / 28 validation / 80 *Alchanggul* test (April 2026 last-frame window). After the 300-point quality filter, 2,520 frames are retained. Ground truth is a per-fruit multi-view 3D reconstruction at harvest (last frame) and a per-fruit-corrected ellipsoid volume from caliper height/width at every session (intermediate frames). Dataset is not publicly released yet.
+Split: 102 train / 28 validation / 80 *Alchanggul* test (greenhouse C, April 2026 last-frame window). Ground truth is a per-fruit multi-view 3D reconstruction at harvest (last frame) and a per-fruit-corrected ellipsoid volume from caliper height/width at every session (intermediate frames).
+
+The dataset is published on the Hugging Face Hub and this code reads it directly, with no conversion step — see [`DOCS/00_PUBLIC_DATASET.md`](DOCS/00_PUBLIC_DATASET.md).
 
 For upstream CoRe++ data, see [3DPotatoTwin](https://huggingface.co/datasets/UTokyo-FieldPhenomics-Lab/3DPotatoTwin) and the CoRe++ [demo dataset](https://github.com/UTokyo-FieldPhenomics-Lab/corepp/releases/tag/demo_dataset).
 
@@ -134,6 +136,7 @@ For upstream CoRe++ data, see [3DPotatoTwin](https://huggingface.co/datasets/UTo
 
 | Doc | Contents |
 |---|---|
+| [`DOCS/00_PUBLIC_DATASET.md`](DOCS/00_PUBLIC_DATASET.md) | Running on the published dataset |
 | [`DOCS/01_DATA_PREPARATION.md`](DOCS/01_DATA_PREPARATION.md) | Dataset layout, splits, metadata CSV |
 | [`DOCS/02_DEEPSDF_TRAINING.md`](DOCS/02_DEEPSDF_TRAINING.md) | DeepSDF decoder workflow |
 | [`DOCS/03_ENCODER_TRAINING.md`](DOCS/03_ENCODER_TRAINING.md) | Encoder pretrain & fine-tune |

@@ -17,6 +17,8 @@ import matplotlib as mpl
 from torchvision.transforms.transforms import ToTensor, Resize
 from torch.utils.data import DataLoader
 
+from dataloaders import dataset_layout as layout
+
 
 def collate_fn_variable_pcd(batch):
     """Custom collate that keeps variable-length tensors (target_pcd, target_sdf, target_sdf_weights, partial_pcd, partial_pcd_world) as lists."""
@@ -345,9 +347,11 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
         # Initialize phenobox flags BEFORE reading filenames
         self.use_phenobox_pcd = use_phenobox_pcd
         self.phenobox_subdir = phenobox_subdir
-        # Initialize orbbec point cloud flags
+        # Initialize orbbec point cloud flags. The public release names partial clouds by
+        # session date with no suffix, so the tag is dropped there and every strip of it
+        # downstream becomes a no-op.
         self.use_orbbec_pcd = use_orbbec_pcd
-        self.orbbec_pcd_suffix = orbbec_pcd_suffix
+        self.orbbec_pcd_suffix = layout.partial_suffix(data_source, orbbec_pcd_suffix)
         self.temporal_loading = temporal_loading
         self.partial_pcd_count = partial_pcd_count
 
@@ -424,15 +428,12 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
         with open(split_json_path) as json_file:
             self.split_ids = json.load(json_file)[split]
 
-        # Only allow canonical sample IDs like "S12", "P101", "P3-1"
-        # (no suffixes like _unhealthy/_unhealthy_recon),
-        # and skip IDs whose folders do not exist (e.g., after renaming).
-        canonical_pat = re.compile(r"^[SP]\d+(-\d+)?(_\d+)?$")
+        # Only allow canonical sample IDs: S12, P101, P3-1 in the working tree, A1/B7/C80
+        # in the public release (no suffixes like _unhealthy/_unhealthy_recon), and skip
+        # IDs whose folders do not exist (e.g., after renaming).
         self.split_ids = [
             fid for fid in self.split_ids
-            if isinstance(fid, str)
-            and canonical_pat.match(fid) is not None
-            and os.path.isdir(os.path.join(self.data_source, fid))
+            if layout.looks_like_fruit_id(fid) and layout.has_fruit(self.data_source, fid)
         ]
 
         # latents dics has to be defined before filtering not useable fruits
@@ -452,13 +453,11 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
         if self.sdf_loss:
             unique_fids = set()
             for f in self.files:
-                parts = f.split('/')
-                if len(parts) >= 4:
-                    unique_fids.add(parts[-4])
+                unique_fids.add(layout.fruit_id_from_path(f, self.data_source))
             n_loaded = 0
             n_missing = 0
             for fid in sorted(unique_fids):
-                sample_path = os.path.join(self.data_source, fid, 'laser', 'samples.npz')
+                sample_path = layout.sdf_samples(self.data_source, fid)
                 if not os.path.exists(sample_path):
                     n_missing += 1
                     continue
@@ -476,7 +475,7 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
         # Build per-(fruit_id, date) volume proxy map from field measurements
         # Used for temporal FT: mask SuperLoss by has_gt_latent and provide
         # vol_proxy / days_since_ref for size-aware contrastive loss.
-        if self.vol_map_csv:
+        if self.vol_map_csv or layout.has_sessions(self.data_source):
             self._build_vol_map()
 
         # Caliper weak supervision: filter intermediate frames lacking caliper data,
@@ -499,11 +498,10 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
                     n_partial += 1
                 except Exception:
                     pass
-                parts = fpath.split('/')
-                fid = parts[-4] if len(parts) >= 4 else None
+                fid = layout.fruit_id_from_path(fpath, self.data_source) or None
                 if fid and fid not in seen_fids:
                     seen_fids.add(fid)
-                    tpath = os.path.join(self.data_source, fid, 'laser', 'fruit.ply')
+                    tpath = layout.gt_cloud(self.data_source, fid)
                     if os.path.isfile(tpath):
                         try:
                             pcd_t = o3d.io.read_point_cloud(tpath)
@@ -526,8 +524,7 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
             n_failed = 0
             for fpath in self.files:
                 try:
-                    parts = fpath.split('/')
-                    fid = parts[-4]
+                    fid = layout.fruit_id_from_path(fpath, self.data_source)
                     frame_id = os.path.splitext(os.path.basename(fpath))[0].replace(self.orbbec_pcd_suffix, '')
                     out = load_aligned_rgbd(
                         fid, frame_id,
@@ -612,33 +609,46 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
             # relative import fallback — keep loader resilient
             compute_ellipsoid_volume = lambda h, w: (4.0 / 3.0) * 3.141592653589793 * (w / 2.0) ** 2 * (h / 2.0)
 
-        csv_path = self.vol_map_csv
-        if not os.path.isabs(csv_path):
-            csv_path = os.path.join(self.data_source, csv_path)
-        if not os.path.exists(csv_path):
-            print(f"[vol_map] WARNING: not found: {csv_path}. Skipping vol_map build.")
-            return
+        if layout.has_sessions(self.data_source):
+            # Public release: caliper readings live in the single sessions table.
+            rows = layout.read_sessions(self.data_source)
+            for r in rows:
+                try:
+                    h, w = float(r['height_mm']), float(r['width_mm'])
+                    if h <= 0 or w <= 0:
+                        continue
+                    self.vol_map[(r['sample_id'], r['session_date'])] = \
+                        compute_ellipsoid_volume(h, w) / 1000.0
+                except (ValueError, KeyError):
+                    continue
+            print(f"[vol_map] Loaded {len(self.vol_map)} caliper sessions from "
+                  f"{layout.sessions_csv(self.data_source)}")
+        else:
+            csv_path = self.vol_map_csv
+            if not os.path.isabs(csv_path):
+                csv_path = os.path.join(self.data_source, csv_path)
+            if not os.path.exists(csv_path):
+                print(f"[vol_map] WARNING: not found: {csv_path}. Skipping vol_map build.")
+                return
 
-        df = pd.read_csv(csv_path)
-        df['date'] = df['date'].astype(str)
-        for _, r in df.iterrows():
-            try:
-                h, w = float(r['height']), float(r['width'])
-                if h <= 0 or w <= 0: continue
-                vol_ml = compute_ellipsoid_volume(h, w) / 1000.0
-                self.vol_map[(str(r['fruit_id']), r['date'])] = vol_ml
-            except Exception:
-                continue
+            df = pd.read_csv(csv_path)
+            df['date'] = df['date'].astype(str)
+            for _, r in df.iterrows():
+                try:
+                    h, w = float(r['height']), float(r['width'])
+                    if h <= 0 or w <= 0: continue
+                    vol_ml = compute_ellipsoid_volume(h, w) / 1000.0
+                    self.vol_map[(str(r['fruit_id']), r['date'])] = vol_ml
+                except Exception:
+                    continue
 
         # Determine last-date per fruit from self.files (the orbbec frames actually used)
-        date_pat = re.compile(r"^(\d{8})_")
+        # Working tree names frames YYYYMMDD_..., the release names them YYYYMMDD.ply.
+        date_pat = re.compile(r"^(\d{8})")
         fid_dates = {}
         all_dates = []
         for fpath in self.files:
-            parts = fpath.split('/')
-            # Expecting: .../{fruit_id}/orbbec/pointclouds/{YYYYMMDD}_...ply
-            if len(parts) < 4: continue
-            fid = parts[-4]
+            fid = layout.fruit_id_from_path(fpath, self.data_source)
             fname = os.path.basename(fpath)
             m = date_pat.match(fname)
             if m:
@@ -667,8 +677,7 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
         self.vol_per_file = []
         self.vol_last_per_file = []  # per-fruit last-date vol, replicated per file
         for fpath in self.files:
-            parts = fpath.split('/')
-            fid = parts[-4] if len(parts) >= 4 else ""
+            fid = layout.fruit_id_from_path(fpath, self.data_source)
             fname = os.path.basename(fpath)
             m = date_pat.match(fname)
             date_str = m.group(1) if m else None
@@ -699,7 +708,17 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
             return
 
         # Load laser GT volumes per fruit
-        if self.gt_volume_csv:
+        if layout.has_sessions(self.data_source):
+            for r in layout.read_sessions(self.data_source):
+                try:
+                    v = float(r['harvest_volume_ml'])
+                except (ValueError, KeyError):
+                    continue
+                if v > 0:
+                    self.last_laser_vol[r['sample_id']] = v
+            print(f"[caliper_weak] Loaded harvest volumes: {len(self.last_laser_vol)} fruits "
+                  f"from {layout.sessions_csv(self.data_source)}")
+        elif self.gt_volume_csv:
             csv_path = self.gt_volume_csv
             if not os.path.isabs(csv_path):
                 csv_path = os.path.join(self.data_source, csv_path)
@@ -756,12 +775,12 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
         # caliper availability); drop intermediate frames lacking caliper measurement.
         # NOTE: "last" = max camera observation date per fruit (in self.files), NOT last caliper
         # date — last camera observation may be after last caliper measurement.
-        date_pat = re.compile(r"^(\d{8})_")
+        # Working tree names frames YYYYMMDD_..., the release names them YYYYMMDD.ply.
+        date_pat = re.compile(r"^(\d{8})")
         # Pre-compute max camera date per fruit from self.files
         last_camera_date_by_fid = {}
         for fpath in self.files:
-            parts = fpath.split('/')
-            fid = parts[-4] if len(parts) >= 4 else ""
+            fid = layout.fruit_id_from_path(fpath, self.data_source)
             fname = os.path.basename(fpath)
             m = date_pat.match(fname)
             if not m:
@@ -776,8 +795,7 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
         n_strong = 0
         n_weak = 0
         for fpath in self.files:
-            parts = fpath.split('/')
-            fid = parts[-4] if len(parts) >= 4 else ""
+            fid = layout.fruit_id_from_path(fpath, self.data_source)
             fname = os.path.basename(fpath)
             m = date_pat.match(fname)
             if not m:
@@ -802,8 +820,7 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
         if hasattr(self, 'has_gt_per_file') and self.has_gt_per_file:
             new_has_gt, new_vol, new_vol_last = [], [], []
             for fpath in self.files:
-                parts = fpath.split('/')
-                fid = parts[-4] if len(parts) >= 4 else ""
+                fid = layout.fruit_id_from_path(fpath, self.data_source)
                 fname = os.path.basename(fpath)
                 m = date_pat.match(fname)
                 date_str = m.group(1) if m else None
@@ -1004,10 +1021,10 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
                                 all_ids.add(fid)
         
         # Filter strictly by folder existence, similar to __init__
-        canonical_pat = re.compile(r"^[SP]\d+(-\d+)?$")
+
         valid_ids = []
         for fid in all_ids:
-            if canonical_pat.match(fid) is not None and os.path.isdir(os.path.join(self.data_source, fid)):
+            if layout.looks_like_fruit_id(fid) and layout.has_fruit(self.data_source, fid):
                 valid_ids.append(fid)
                 
         # If fallback needed (no json or empty), use local split_ids
@@ -1016,7 +1033,7 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
 
         dmax = 0
         for fruit_id in valid_ids:
-            target_pcd_fname = os.path.join(self.data_source, fruit_id, 'laser', 'fruit.ply')
+            target_pcd_fname = layout.gt_cloud(self.data_source, fruit_id)
             if not os.path.exists(target_pcd_fname):
                 continue
             target_pcd = o3d.io.read_point_cloud(target_pcd_fname)
@@ -1064,7 +1081,7 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
                     files.append(os.path.join(pc_dir, fname))
             elif self.use_orbbec_pcd:
                 # Load preprocessed point clouds from orbbec/pointclouds
-                pc_dir = os.path.join(self.data_source, id, 'orbbec', 'pointclouds')
+                pc_dir = layout.partial_dir(self.data_source, id)
                 if not os.path.isdir(pc_dir):
                     continue
                 
@@ -1075,19 +1092,20 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
                 if self.temporal_loading:
                      ply_files = candidates
                 else:
-                    # Filter to only keep files from the LATEST date (format: YYYYMMDD_...)
+                    # Filter to only keep files from the LATEST date. Names are
+                    # YYYYMMDD_... in the working tree and YYYYMMDD.ply in the release.
                     latest_date = None
-                    date_pattern = re.compile(r"^(\d{8})_")
-                    
+                    date_pattern = re.compile(r"^(\d{8})")
+
                     for f in candidates:
                         match = date_pattern.match(f)
                         if match:
                             date_str = match.group(1)
                             if latest_date is None or date_str > latest_date:
                                 latest_date = date_str
-                    
+
                     if latest_date:
-                        ply_files = [f for f in candidates if f.startswith(latest_date + "_")]
+                        ply_files = [f for f in candidates if f.startswith(latest_date)]
                     else:
                         # Fallback: if no dates found, use all files (legacy behavior)
                         ply_files = candidates
@@ -1214,9 +1232,9 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
         # ugly stuff to get consistent ids
         if self.use_phenobox_pcd:
             # files[idx] points to a phenobox partial PLY
-            fruit_id = self.files[idx].split('/')[-4]
+            fruit_id = layout.fruit_id_from_path(self.files[idx], self.data_source)
             frame_id = os.path.splitext(os.path.basename(self.files[idx]))[0]
-            target_pcd_fname = os.path.join(self.data_source, fruit_id, 'laser', 'fruit.ply')
+            target_pcd_fname = layout.gt_cloud(self.data_source, fruit_id)
             target_pcd = o3d.io.read_point_cloud(target_pcd_fname)
             partial_pcd = o3d.io.read_point_cloud(self.files[idx])
             crop_dim = (self.pad_size, self.pad_size)
@@ -1230,11 +1248,11 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
             crop_origin = (0, 0)
         elif self.use_orbbec_pcd:
             # files[idx] points to a preprocessed orbbec PLY
-            fruit_id = self.files[idx].split('/')[-4]
+            fruit_id = layout.fruit_id_from_path(self.files[idx], self.data_source)
             frame_id = os.path.splitext(os.path.basename(self.files[idx]))[0]
             # Remove the suffix to get the base frame_id
             frame_id = frame_id.replace(self.orbbec_pcd_suffix, '')
-            target_pcd_fname = os.path.join(self.data_source, fruit_id, 'laser', 'fruit.ply')
+            target_pcd_fname = layout.gt_cloud(self.data_source, fruit_id)
             if self.cache_pcds_in_ram and fruit_id in self._target_pcd_cache:
                 target_pcd = self._target_pcd_cache[fruit_id]
             else:
@@ -1258,10 +1276,10 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
             k = self.Ks.get(fruit_id, np.eye(3))
             crop_origin = (0, 0)
         else:
-            fruit_id = self.files[idx].split('/')[-4]
+            fruit_id = layout.fruit_id_from_path(self.files[idx], self.data_source)
             frame_id = self.files[idx].split('/')[-1][:-4]
             
-            target_pcd_fname = os.path.join(self.data_source, fruit_id+'/laser/fruit.ply')
+            target_pcd_fname = layout.gt_cloud(self.data_source, fruit_id)
             target_pcd = o3d.io.read_point_cloud(target_pcd_fname)
 
             image_path = self.files[idx]
@@ -1327,7 +1345,7 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
         # Volume proxy / has_gt_latent / days_since_ref (temporal FT support).
         # Populated only when vol_map was built (vol_map_csv given in constructor).
         _date_str = self._parse_date_from_frame_id(frame_id) if hasattr(self, '_parse_date_from_frame_id') else None
-        if self.vol_map_csv and _date_str:
+        if (self.vol_map_csv or layout.has_sessions(self.data_source)) and _date_str:
             _vol, _has_gt = self._frame_vol_and_has_gt(fruit_id, _date_str)
             _days = self._days_since_ref(_date_str)
         else:
@@ -1340,7 +1358,7 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
         # Loads pos/neg samples lazily, subsamples per-iter, and stores xyz + sdf
         # for use in train.py's SDF loss block. Only active when sdf_loss=True.
         if self.sdf_loss:
-            sample_path = os.path.join(self.data_source, fruit_id, 'laser', 'samples.npz')
+            sample_path = layout.sdf_samples(self.data_source, fruit_id)
             if os.path.exists(sample_path):
                 if fruit_id not in self._sdf_samples_cache:
                     npz = np.load(sample_path)
@@ -1531,7 +1549,7 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
         item['proxy_volume_ml'] = torch.tensor(_proxy_vol, dtype=torch.float32)
 
         # Load Ground Truth Size (BBox Extents) for Size Stream Supervision
-        bbox_path = os.path.join(self.data_source, fruit_id, "tf", "bounding_box.npz")
+        bbox_path = layout.bounding_box(self.data_source, fruit_id)
         try:
             if os.path.exists(bbox_path):
                 data = np.load(bbox_path)
@@ -1576,7 +1594,7 @@ class MaskedCameraLaserData(torch.utils.data.Dataset):
                 elif self.use_raw_camera_rgbd:
                     # Cache miss → load aligned camera-frame RGB-D on the fly.
                     from corepp.baselines.corepp_vanilla.raw_rgbd import load_aligned_rgbd
-                    parts = fpath.split('/'); fid = parts[-4]
+                    fid = layout.fruit_id_from_path(fpath, self.data_source)
                     frame_id_raw = os.path.splitext(os.path.basename(fpath))[0].replace(self.orbbec_pcd_suffix, '')
                     out = load_aligned_rgbd(
                         fid, frame_id_raw,

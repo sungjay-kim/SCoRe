@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+from dataloaders import dataset_layout as layout
 
 
 @dataclass
@@ -46,10 +47,23 @@ class TemporalMetadataIndex:
         timestamp_csv: Optional[str],
         min_sequence_length: int = 2,
         orbbec_suffix: str = "_preprocessed",
+        data_root: Optional[str] = None,
     ) -> None:
         self.orbbec_suffix = orbbec_suffix
         self.metadata: Dict[Tuple[str, str], float] = {}
-        if timestamp_csv and os.path.isfile(timestamp_csv):
+        if data_root and layout.has_sessions(data_root):
+            # Public release: session dates come from the single metadata table, and the
+            # date doubles as the frame id because files are named by session. Dates are
+            # parsed as dates rather than through _parse_timestamp, whose numeric fast
+            # path would read a bare YYYYMMDD as the integer 20260311 and collapse every
+            # inter-session interval to zero.
+            for row in layout.read_sessions(data_root):
+                try:
+                    ts = datetime.strptime(row["session_date"].strip(), "%Y%m%d").timestamp()
+                except (ValueError, KeyError, AttributeError):
+                    continue
+                self.metadata[(row["sample_id"], row["session_date"])] = ts
+        elif timestamp_csv and os.path.isfile(timestamp_csv):
             df = pd.read_csv(timestamp_csv)
             required_cols = {"fruit_id", "frame_id", "timestamp"}
             if not required_cols.issubset(df.columns):
@@ -66,7 +80,7 @@ class TemporalMetadataIndex:
 
         grouped: Dict[str, List[FrameRecord]] = {}
         for idx, path in enumerate(files):
-            fruit_id = path.split('/')[-4]
+            fruit_id = layout.fruit_id_from_path(path)
             filename = os.path.splitext(os.path.basename(path))[0]
             if filename.endswith(orbbec_suffix):
                 frame_id = filename.replace(orbbec_suffix, '')

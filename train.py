@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _repo_bootstrap  # noqa: F401  (binds the repo root as `corepp`)
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -22,6 +26,7 @@ from sdfrenderer.grid import Grid3D
 
 from dataloaders.cameralaser_w_masks import MaskedCameraLaserData, collate_fn_variable_pcd
 from torch.utils.data import Dataset
+from dataloaders import dataset_layout as layout
 
 
 class ScaleExpandedDataset(Dataset):
@@ -198,13 +203,7 @@ class BinBalancedDataset(Dataset):
 
     @staticmethod
     def _fruit_id_from_path(path):
-        from pathlib import Path as _Path
-        parts = _Path(path).parts
-        # Walk back: fruit_id is usually 4 levels above the file (e.g., kmelon_centered/PXX/orbbec/pointclouds/file.ply)
-        for p in reversed(parts):
-            if p and (p[0] in 'SP') and len(p) > 1 and any(c.isdigit() for c in p[1:]):
-                return p
-        return parts[-4] if len(parts) >= 4 else ''
+        return layout.fruit_id_from_path(path)
 
     def __getattr__(self, name):
         """Proxy to base dataset (e.g., dataset.Ks)."""

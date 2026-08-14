@@ -8,11 +8,9 @@ import sys
 from pathlib import Path
 
 # Add root directory to python path for imports
-root_dir = Path(__file__).resolve().parents[2]
-if str(root_dir) not in sys.path:
-    sys.path.append(str(root_dir))
-if str(root_dir / "corepp") not in sys.path:
-    sys.path.append(str(root_dir / "corepp"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _repo_bootstrap  # noqa: F401  (binds the repo root as `corepp`)
+from dataloaders import dataset_layout as layout
 
 from tqdm import tqdm
 from corepp.metrics_3d import chamfer_distance, precision_recall
@@ -85,7 +83,8 @@ if __name__ == "__main__":
     pr = precision_recall.PrecisionRecall(0.001, 0.01, 50)
     logger.info("Initialized Chamfer Distance and Precision-Recall metrics")
 
-    gt_dir = os.path.join(args.gt_dir, '{}/laser/fruit.ply')
+    # Formatted per fruit below; layout.gt_cloud resolves either dataset layout.
+    gt_dir = layout.gt_cloud(args.gt_dir, '{}')
 
     names = []
     skipped_not_mesh = 0

@@ -16,11 +16,8 @@ import shutil
 import subprocess
 
 # Add root directory to python path for imports
-root_dir = Path(__file__).resolve().parents[2]
-if str(root_dir) not in sys.path:
-    sys.path.append(str(root_dir))
-if str(root_dir / "corepp") not in sys.path:
-    sys.path.append(str(root_dir / "corepp"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _repo_bootstrap  # noqa: F401  (binds the repo root as `corepp`)
 
 import numpy as np
 import torch
@@ -527,6 +524,7 @@ def train_temporal(args, param: Dict, latent_size: int, decoder: nn.Module) -> N
             timestamp_csv=param.get("timestamp_csv"),
             min_sequence_length=int(param.get("min_sequence_length", 2)),
             orbbec_suffix=param.get("orbbec_pcd_suffix", "_preprocessed"),
+            data_root=param.get("data_dir"),
         )
 
         if not metadata.sequences:
@@ -1218,6 +1216,7 @@ def train_temporal(args, param: Dict, latent_size: int, decoder: nn.Module) -> N
                         timestamp_csv=param.get("timestamp_csv"),
                         min_sequence_length=int(param.get("min_sequence_length", 2)),
                         orbbec_suffix=param.get("orbbec_pcd_suffix", "_preprocessed"),
+                        data_root=param.get("data_dir"),
                     )
                     # Load GT CSV
                     # Load GT CSV

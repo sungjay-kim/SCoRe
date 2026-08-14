@@ -42,3 +42,8 @@ baselines/
 # README assets (override generic *.png / *.gif / figures/ rules above)
 !assets/
 !assets/**
+
+# Downloaded artifacts: released weights and the published dataset.
+# No trailing slash, so a symlink pointing elsewhere is ignored too.
+weights
+data/3DKoreanMelon

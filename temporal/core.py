@@ -19,11 +19,8 @@ def stable_sample_seed(sample_id: str, base: int = 42) -> int:
     return ((int(h[:8], 16) ^ base) & 0x7fffffff)
 
 # Add root directory to python path for imports
-root_dir = Path(__file__).resolve().parents[2]
-if str(root_dir) not in sys.path:
-    sys.path.append(str(root_dir))
-if str(root_dir / "corepp") not in sys.path:
-    sys.path.append(str(root_dir / "corepp"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _repo_bootstrap  # noqa: F401  (binds the repo root as `corepp`)
 
 import torch
 import torchvision.transforms as transforms

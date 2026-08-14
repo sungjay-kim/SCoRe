@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _repo_bootstrap  # noqa: F401  (binds the repo root as `corepp`)
 from re import I
 from numpy.core.fromnumeric import mean
 import torch
@@ -51,6 +55,7 @@ import json
 from utils import sdf2mesh_cuda, mesh_volume_ml, tensor_dict_2_float_dict
 from metrics_3d import chamfer_distance, precision_recall
 from temporal.core import apply_test_occlusion, stable_sample_seed
+from dataloaders import dataset_layout as layout
 
 
 def _safe_numeric_series(df: pd.DataFrame, col: str) -> pd.Series:
@@ -538,7 +543,7 @@ def main_function(decoder, pretrain, cfg, latent_size, checkpoint_dir_override=N
         _date_re_fd = _re_fd.compile(r"^(\d{8})")
         _earliest_fd = {}
         for _f in getattr(cl_dataset, "files", []):
-            _fid = _f.split('/')[-4]
+            _fid = layout.fruit_id_from_path(_f)
             _m = _date_re_fd.match(os.path.basename(_f))
             if not _m: continue
             _d = _m.group(1)
@@ -546,7 +551,7 @@ def main_function(decoder, pretrain, cfg, latent_size, checkpoint_dir_override=N
                 _earliest_fd[_fid] = _d
         kept_fd = []
         for _f in cl_dataset.files:
-            _fid = _f.split('/')[-4]
+            _fid = layout.fruit_id_from_path(_f)
             _m = _date_re_fd.match(os.path.basename(_f))
             if _m and _m.group(1) == _earliest_fd.get(_fid):
                 continue  # drop earliest-date frame
@@ -564,7 +569,7 @@ def main_function(decoder, pretrain, cfg, latent_size, checkpoint_dir_override=N
         _date_re_lf = _re_lf.compile(r"^(\d{8})")
         _latest_lf = {}
         for _f in getattr(cl_dataset, "files", []):
-            _fid = _f.split('/')[-4]
+            _fid = layout.fruit_id_from_path(_f)
             _m = _date_re_lf.match(os.path.basename(_f))
             if not _m:
                 continue
@@ -573,7 +578,7 @@ def main_function(decoder, pretrain, cfg, latent_size, checkpoint_dir_override=N
                 _latest_lf[_fid] = _d
         kept = []
         for _f in cl_dataset.files:
-            _fid = _f.split('/')[-4]
+            _fid = layout.fruit_id_from_path(_f)
             _m = _date_re_lf.match(os.path.basename(_f))
             if _m and _m.group(1) == _latest_lf.get(_fid):
                 kept.append(_f)
@@ -597,7 +602,7 @@ def main_function(decoder, pretrain, cfg, latent_size, checkpoint_dir_override=N
         import re as _re_np
         _date_re_np = _re_np.compile(r"^(\d{8})")
         for _f in cl_dataset.files:
-            _fid = _f.split('/')[-4]
+            _fid = layout.fruit_id_from_path(_f)
             _base = os.path.splitext(os.path.basename(_f))[0]
             _frame = _base.replace(orbbec_suf, '') if _base.endswith(orbbec_suf) else _base
             _m = _date_re_np.match(_frame)
@@ -671,7 +676,7 @@ def main_function(decoder, pretrain, cfg, latent_size, checkpoint_dir_override=N
         _date_re = _re.compile(r"^(\d{8})")
         _latest_date_per_fruit = {}
         for _f in getattr(cl_dataset, "files", []):
-            _fid = _f.split('/')[-4]
+            _fid = layout.fruit_id_from_path(_f)
             _base = os.path.basename(_f)
             _m = _date_re.match(_base)
             if not _m: continue
@@ -712,7 +717,7 @@ def main_function(decoder, pretrain, cfg, latent_size, checkpoint_dir_override=N
                         bbox_scale = item['bbox_scale_tensor'][0].cpu().numpy()
                         gt_np = gt_np * bbox_scale + bbox_center
                     else:
-                        gt_path = os.path.join(param["data_dir"], item['fruit_id'][0], 'laser', 'fruit.ply')
+                        gt_path = layout.gt_cloud(param["data_dir"], item['fruit_id'][0])
                         gt_pcd = o3d.io.read_point_cloud(gt_path)
                         gt_np = np.asarray(gt_pcd.points)
                     gt.points = o3d.utility.Vector3dVector(gt_np)

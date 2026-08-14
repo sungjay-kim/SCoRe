@@ -9,11 +9,8 @@ from typing import Dict, Optional
 
 import sys
 # Add root directory to python path for imports
-root_dir = Path(__file__).resolve().parents[2]
-if str(root_dir) not in sys.path:
-    sys.path.append(str(root_dir))
-if str(root_dir / "corepp") not in sys.path:
-    sys.path.append(str(root_dir / "corepp"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import _repo_bootstrap  # noqa: F401  (binds the repo root as `corepp`)
 
 import numpy as np
 import open3d as o3d
@@ -26,6 +23,7 @@ import deepsdf.deep_sdf.mesh as ds_mesh
 
 from corepp.metrics_3d import chamfer_distance, precision_recall
 from corepp.networks.temporal_models import TemporalFusionModule, CrossAttentionTemporalFusion, EncoderMemoryBuffer, LatentKalmanFusion, LatentKalmanFusionV2, LatentKalmanFusionV3
+from dataloaders import dataset_layout as layout
 
 
 class SimpleFusion(torch.nn.Module):
@@ -505,7 +503,7 @@ def run_temporal_inference(param: Dict, args) -> None:
             from collections import defaultdict
             files_by_fid = defaultdict(list)
             for path in dataset.files:
-                fid = path.split('/')[-4]
+                fid = layout.fruit_id_from_path(path)
                 base = os.path.splitext(os.path.basename(path))[0]
                 frame = base.replace(orbbec_suf, '') if base.endswith(orbbec_suf) else base
                 date = frame.split("_")[0]
@@ -516,7 +514,7 @@ def run_temporal_inference(param: Dict, args) -> None:
         before = len(dataset.files)
         kept = []
         for path in dataset.files:
-            fid = path.split('/')[-4]
+            fid = layout.fruit_id_from_path(path)
             base = os.path.splitext(os.path.basename(path))[0]
             frame = base.replace(orbbec_suf, '') if base.endswith(orbbec_suf) else base
             date = frame.split("_")[0]
@@ -544,7 +542,7 @@ def run_temporal_inference(param: Dict, args) -> None:
         kept = []
         n_drop = 0
         for path in dataset.files:
-            fid = path.split('/')[-4]
+            fid = layout.fruit_id_from_path(path)
             base = os.path.splitext(os.path.basename(path))[0]
             frame = base.replace(orbbec_suf, '') if base.endswith(orbbec_suf) else base
             date = frame.split("_")[0]
@@ -569,6 +567,7 @@ def run_temporal_inference(param: Dict, args) -> None:
         timestamp_csv=param.get("timestamp_csv"),
         min_sequence_length=int(param.get("min_sequence_length", 2)),
         orbbec_suffix=param.get("orbbec_pcd_suffix", "_preprocessed"),
+        data_root=param.get("data_dir"),
     )
 
     if not metadata.sequences:
@@ -577,16 +576,30 @@ def run_temporal_inference(param: Dict, args) -> None:
     # Load GT metadata CSV similar to test.py
     gt_df = None
     try:
-        species = str(param.get('species', '')).lower()
-        # TRY PARAMETER FIRST
-        csv_path = param.get("val_gt_csv")
-        if not csv_path or not os.path.exists(csv_path):
-             csv_path = "./data/3DKmelonDemo/ground_truth.csv" if 'kmelon' in species else "./data/3DPotatoTwinDemo/ground_truth.csv"
-        # Support user override if needed, but default to these locations
-        if os.path.exists(csv_path):
-             import pandas as pd
-             gt_df = pd.read_csv(csv_path)
-             print(f"[temporal-test] Loaded ground truth metadata from {csv_path}")
+        import pandas as pd
+        data_root = param.get("data_dir", "")
+        if layout.has_sessions(data_root):
+            # Public release: harvest volume, mass and cultivar all sit in the sessions
+            # table, one row per session. Collapse to one row per fruit under the column
+            # names safe_lookup expects.
+            sess = pd.DataFrame(layout.read_sessions(data_root))
+            gt_df = (sess.drop_duplicates(subset='sample_id')
+                         .rename(columns={'sample_id': 'label',
+                                          'harvest_volume_ml': 'volume_ml',
+                                          'harvest_mass_g': 'weight_g_inctack'})
+                         .assign(volume_metashape=lambda d: d['volume_ml']))
+            print(f"[temporal-test] Loaded ground truth metadata for {len(gt_df)} fruits "
+                  f"from {layout.sessions_csv(data_root)}")
+        else:
+            species = str(param.get('species', '')).lower()
+            # TRY PARAMETER FIRST
+            csv_path = param.get("val_gt_csv")
+            if not csv_path or not os.path.exists(csv_path):
+                 csv_path = "./data/3DKmelonDemo/ground_truth.csv" if 'kmelon' in species else "./data/3DPotatoTwinDemo/ground_truth.csv"
+            # Support user override if needed, but default to these locations
+            if os.path.exists(csv_path):
+                 gt_df = pd.read_csv(csv_path)
+                 print(f"[temporal-test] Loaded ground truth metadata from {csv_path}")
     except Exception as ex:
         print(f"[temporal-test] Warning: Failed to load GT metadata CSV: {ex}")
 
@@ -1129,7 +1142,7 @@ def run_temporal_inference(param: Dict, args) -> None:
                     should_compute_metrics = compute_metrics and ((not metrics_final_frame_only) or is_last_frame)
                     if should_compute_metrics:
                         try:
-                            gt_mesh_path = Path(param["data_dir"]) / fruit_id / "laser" / "fruit.ply"
+                            gt_mesh_path = Path(layout.gt_cloud(param["data_dir"], fruit_id))
                             gt = o3d.io.read_point_cloud(str(gt_mesh_path))
                             if len(gt.points) > 0:
                                 cd_metric.reset()
