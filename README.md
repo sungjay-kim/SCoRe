@@ -126,9 +126,13 @@ The PC1/PC2 growth axes are computed once per encoder by an offline PCA on withi
 
 Split: 102 train / 28 validation / 80 *Alchanggul* test (greenhouse C, April 2026 last-frame window). Ground truth is a per-fruit multi-view 3D reconstruction at harvest (last frame) and a per-fruit-corrected ellipsoid volume from caliper height/width at every session (intermediate frames).
 
-The dataset is published on the Hugging Face Hub and this code reads it directly, with no conversion step — see [`DOCS/00_PUBLIC_DATASET.md`](DOCS/00_PUBLIC_DATASET.md).
+**Download: [`Sungjay/3DKoreanMelon`](https://huggingface.co/datasets/Sungjay/3DKoreanMelon)** · DOI [10.57967/hf/9982](https://doi.org/10.57967/hf/9982) · CC BY 4.0 · ~334 MB
 
-For upstream CoRe++ data, see [3DPotatoTwin](https://huggingface.co/datasets/UTokyo-FieldPhenomics-Lab/3DPotatoTwin) and the CoRe++ [demo dataset](https://github.com/UTokyo-FieldPhenomics-Lab/corepp/releases/tag/demo_dataset).
+```bash
+hf download Sungjay/3DKoreanMelon --repo-type dataset --local-dir data/3DKoreanMelon
+```
+
+This code reads that layout directly, with no conversion step. See [`DOCS/00_PUBLIC_DATASET.md`](DOCS/00_PUBLIC_DATASET.md) for the run command and the trained weights.
 
 ---
 
