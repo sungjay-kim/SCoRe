@@ -31,26 +31,26 @@ and C, 2026). Greenhouse C is the held-out test set.
 ## Get the weights
 
 Trained parameters ship with the code rather than the dataset, as a release asset — they
-are only meaningful alongside the revision that produced them. About 30 MB:
+are only meaningful alongside the revision that produced them. About 31 MB:
 
 ```bash
 curl -L -o score-weights.tar.gz \
-    https://github.com/sungjay-kim/SCoRe/releases/download/v1.0/score-weights-v1.0.tar.gz
+    https://github.com/sungjay-kim/SCoRe/releases/download/v1.1/score-weights-v1.1.tar.gz
 tar xzf score-weights.tar.gz          # unpacks into weights/
 ```
 
 ```
 weights/
 ├── MANIFEST.md                                   what each file is and what pairs with what
-├── score_temporal.pt                             point cloud encoder + temporal module
-├── aniso_latent64.npz                            latent anisotropy basis
-└── deepsdf_latent64/
+├── score_encoder.pt                              fine-tuned point cloud encoder (PCE-large, D=32)
+├── aniso_latent32.npz                            latent anisotropy basis
+└── deepsdf_latent32/
     ├── specs.json                                decoder architecture
-    ├── ModelParameters/470.pth                   decoder at epoch 470
-    └── Reconstructions/470/Codes/complete/       per-fruit latent codes
+    ├── ModelParameters/380.pth                   decoder at epoch 380
+    └── Reconstructions/380/Codes/complete/       per-fruit latent codes
 ```
 
-`score_temporal.pt` and `aniso_latent64.npz` belong together — the anisotropy basis
+`score_encoder.pt` and `aniso_latent32.npz` belong together — the anisotropy basis
 describes one specific encoder's latent space. See `weights/MANIFEST.md`.
 
 ## Run
@@ -58,8 +58,8 @@ describes one specific encoder's latent space. See `weights/MANIFEST.md`.
 ```bash
 python temporal/test.py \
     --cfg configs/public/score_public_dataset.json \
-    --checkpoint weights/score_temporal.pt \
-    --fusion_mode ema_max_pc12 --ema_tau 3.5 \
+    --checkpoint weights/score_encoder.pt \
+    --fusion_mode ema_max --ema_tau 3.0 \
     --min_n_points 300 --test_occlusion_levels 0
 ```
 
@@ -68,15 +68,15 @@ is the reference configuration: every path in it is relative, so it works from a
 clone once the data and weights are in place.
 
 **The fusion flags are required.** SCoRe is the parameter-free rule that
-`--fusion_mode ema_max_pc12 --ema_tau 3.5` selects: a time-aware EMA over the latent with
-a monotone clamp on the first two principal directions. `--fusion_mode` defaults to
+`--fusion_mode ema_max --ema_tau 3.0` selects: a time-aware EMA over the latent with
+a monotone clamp along its first principal direction. `--fusion_mode` defaults to
 `kalman`, which runs the trained Kalman module SCoRe was developed against — a different
 model that produces different numbers without complaining.
 
 Expected on load: 210 fruits, 2,738 frames across the three splits (1,212 train, 347
 validation, 1,179 test), and 2,312 caliper sessions read from `sessions.csv`. Evaluation
 covers the 79 test fruits whose final observation passes the 300-point filter, and should
-report chamfer distance 2.76 mm, F1 at 5 mm 86.6 %, volume RMSE 47.2 mL, MAPE 14.1 %.
+report chamfer distance 2.95 mm, F1 at 5 mm 83.0 %, volume RMSE 50.6 mL, MAPE 15.2 %.
 
 ## What changes between the two layouts
 
