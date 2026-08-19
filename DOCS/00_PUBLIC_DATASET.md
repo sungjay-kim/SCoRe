@@ -76,7 +76,14 @@ model that produces different numbers without complaining.
 Expected on load: 210 fruits, 2,738 frames across the three splits (1,212 train, 347
 validation, 1,179 test), and 2,312 caliper sessions read from `sessions.csv`. Evaluation
 covers the 79 test fruits whose final observation passes the 300-point filter, and should
-report chamfer distance 2.95 mm, F1 at 5 mm 83.0 %, volume RMSE 50.6 mL, MAPE 15.2 %.
+report chamfer distance 2.97 mm, F1 at 5 mm 82.7 %, volume RMSE 52.3 mL, MAPE 15.4 %.
+
+The paper reports 2.95 mm, 83.0 %, 50.6 mL and 15.2 % for this same model and checkpoint.
+The gap is the harvest volume reference, not the model: `harvest_volume_ml` in the release
+is recomputed as the convex hull of the released reference scan, which sits a median 0.7 %
+above the screened Poisson mesh volume the paper evaluated against. Substituting that one
+reference accounts for 1.2 mL of the 1.7 mL RMSE difference; the remaining 0.5 mL is the
+reference scans and partial clouds being read through the release layout.
 
 ## What changes between the two layouts
 
