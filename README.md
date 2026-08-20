@@ -12,12 +12,12 @@ A robotic platform revisits each fruit every 2 to 3 days. Each visit produces on
 
 ![Three-stage pipeline. Stage 1 trains the DeepSDF decoder on per-fruit ground-truth meshes; Stage 2 trains the point cloud encoder against the Stage 1 per-fruit latents; Stage 3 (inference only) feeds each session's encoder output z_t together with the running fused state μ_{t-1} through the temporal latent fusion module, and decodes the fused latent μ_t into the predicted 3D shape completion.](assets/figures/pipeline_stages.png)
 
-- **Time-aware EMA** over the full latent — irregular session intervals are absorbed by α = 1 − exp(−Δt/τ); at τ = 3.5 days the prior and observation contribute equally when Δt = τ.
-- **Hard monotone clamp** on the two leading principal directions of the within-fruit consecutive-frame latent change Δz = z_{t+1} − z_t. Fruit volume cannot decrease across visits; the running maximum is enforced per axis after PCA orientation.
+- **Time-aware EMA** over the full latent — irregular session intervals are absorbed by weighting each new observation by how long it has been since the last visit.
+- **Hard monotone clamp** on the leading principal direction of the within-fruit consecutive-frame latent change Δz = z_{t+1} − z_t, encoding the prior that fruit volume does not decrease before harvest.
 - **Frozen DeepSDF decoder** — only the encoder is trained. Stage 3 (fusion) is inference time only and learns nothing.
 - **Weak supervision** at fine-tuning via an **occupancy volume** V_occ = Σ σ(−SDF/T) · v_voxel, supervised against a per-fruit-corrected ellipsoid GT V_ell on intermediate frames.
 
-![Temporal latent fusion module (Stage 3): (a) an offline PCA pre-pass identifies the two leading growth axes v_pc1, v_pc2 from per-fruit consecutive-frame latent differences Δz; (b) the time-aware EMA smooths z_t into μ̃_t with weight α = 1 − exp(−Δt/τ); (c) the growth-wise monotone clamp projects μ̃_t onto each growth axis and enforces a per-axis running maximum against the prior s^(k)_{t-1}; the two clamped projections are recomposed with the orthogonal residual to form μ_t.](assets/figures/fusion_module.png)
+![Temporal latent fusion module (Stage 3): (a) an offline PCA pre-pass identifies the leading growth axis v_pc1 from per-fruit consecutive-frame latent differences Δz; (b) the time-aware EMA smooths z_t into μ̃_t; (c) the growth-wise monotone clamp projects μ̃_t onto that axis and enforces a running maximum against the prior s_{t-1}; the clamped projection is recomposed with the orthogonal residual to form μ_t.](assets/figures/fusion_module.png)
 
 ---
 
@@ -35,7 +35,7 @@ corepp/
 │   └── utils.py            # temporal metadata index
 ├── analysis/               # offline latent / size analyses
 ├── scripts/                # PCA pre-pass, ablation aggregation, figure builders
-├── configs/kmelon/         # experiment configs (latent_64 = reference)
+├── configs/kmelon/         # experiment configs (latent_32 = reference; latent_64 = earlier campaign)
 ├── DOCS/                   # detailed walkthroughs
 ├── train.py / test.py      # static CoRe++ baseline entry points
 └── train_deep_sdf.py       # DeepSDF decoder training
@@ -47,28 +47,30 @@ See [`CHANGELOG.md`](CHANGELOG.md) for the full diff against upstream `corepp`.
 
 ## Pipeline (3 Stages)
 
-| # | Stage | Script | Reference config (D = 64, PCE-large, max + mean) |
+| # | Stage | Script | Reference config (D = 32, PCE-large, max + mean) |
 |---|---|---|---|
-| 1 | DeepSDF decoder | `train_deep_sdf.py` | `deepsdf/experiments/.../specs.json` |
-| 2a | Encoder pretrain (138 synth meshes) | `train.py` | `configs/kmelon/latent_64/pce_pretrain_l64_large_maxmean_archMatch.json` |
-| 2b | Encoder fine-tune (102 real fruits) | `train.py` | `configs/kmelon/latent_64/pce_finetune_v25_calFix_weakSoftvol_l64_large_maxmean_noAug_archMatch_e100_seed11_ftonly.json` |
-| 3 | Temporal latent fusion *(inference only)* | `temporal/test.py` | `configs/kmelon/latent_64/temporal_archMatch_l64_large_maxmean_ema_pc1_monotone_tau3.5_seed11_ftonly.json` |
+| 1 | DeepSDF decoder | `train_deep_sdf.py` | `deepsdf/experiments/.../specs.json`, decoder epoch 380 |
+| 2a | Encoder pretrain (138 synth meshes) | `train.py` | `configs/kmelon/latent_32/pretrain.json` |
+| 2b | Encoder fine-tune (102 real fruits) | `train.py` | `configs/kmelon/latent_32/finetune.json` |
+| 3 | Temporal latent fusion *(inference only)* | `temporal/test.py` | `configs/kmelon/latent_32/temporal.json` |
 
-Stage 3 is parameter-free. The same fine-tuned encoder checkpoint produces both the single-frame CoRe++ baseline and the SCoRe sequence output; the only difference at inference is whether the fusion is applied.
+Stage 3 is parameter-free. The same fine-tuned encoder checkpoint produces both the single-frame CoRe++ baseline and the SCoRe sequence output; the only difference at inference is whether the fusion is applied. See [`configs/kmelon/latent_32/README.md`](configs/kmelon/latent_32/README.md) for the configs and [`DOCS/00_PUBLIC_DATASET.md`](DOCS/00_PUBLIC_DATASET.md) to reproduce without retraining.
 
 ---
 
-## Headline Results (80-fruit test set, last frame, occlusion 0)
+## Headline Results (last frame, no added occlusion)
 
-| Method | RMSE (ml) ↓ | MAPE (%) ↓ | F1 @ 5 mm (%) ↑ | d_CD (mm) ↓ |
+| Method | RMSE (mL) ↓ | MAPE (%) ↓ | F1 @ 5 mm (%) ↑ | d_CD (mm) ↓ |
 |---|---:|---:|---:|---:|
-| 2D De-occlusion + Reg (lower bound) | 95.0 | 31.21 | — | — |
+| 2D De-occlusion + Reg (conventional image-based reference) | 95.0 | 31.21 | — | — |
 | T-CoRe (Magistri et al. 2024) | 130.4 | 34.88 | 60.97 | 4.71 |
-| CoRe++ (PCE-large, D = 64) | 81.8 | 23.24 | 69.74 | 4.14 |
-| **SCoRe (this work)** | **46.6** | **14.08** | **86.84** | **2.75** |
-| DeepSDF decoder, optimal GT latent (upper bound) | 8.3 | 1.28 | 99.12 | 1.07 |
+| CoRe++ (PCE-large, D = 32) | 87.4 | 24.93 | 66.13 | 4.47 |
+| **SCoRe (this work)** | **50.6** | **15.19** | **83.00** | **2.95** |
+| DeepSDF decoder oracle, latent optimised against the GT mesh | 8.7 | 1.84 | 98.99 | 1.22 |
 
-Intermediate-frame RMSE against the corrected ellipsoid GT: **46.0 ml** (MAPE 22.0 %). Under heavy 60 % occlusion of the last frame, SCoRe holds last-frame RMSE at 63.6 ml (CoRe++ 110.9 ml) and F1 @ 5 mm at 77.0 %.
+Under heavy 60 % occlusion of the last frame, SCoRe holds last-frame RMSE at 70.3 mL
+(CoRe++ 116.7 mL) and F1 @ 5 mm at 77.5 %. The decoder oracle auto-decodes the
+ground-truth mesh and is not a deployable method.
 
 ![Per-fruit mesh time series for a representative test fruit across the growing season. Rows: partial PCD input, CoRe++ (PCE) single-frame mesh, SCoRe sequential mesh. The PCE row jitters frame-to-frame on the same dates that SCoRe smooths into a nearly monotone growth sequence; the last-day column is error-colored against the 3D reconstruction GT.](assets/figures/mesh_timeseries.png)
 
@@ -88,11 +90,11 @@ source activate_corepp.sh
 ```bash
 # Pretrain on 138 synthetic-occlusion meshes
 CUDA_VISIBLE_DEVICES=0 python train.py \
-    --cfg configs/kmelon/latent_64/pce_pretrain_l64_large_maxmean_archMatch.json
+    --cfg configs/kmelon/latent_32/pretrain.json
 
 # Fine-tune on real partial PCDs from the 102 in-domain training fruits
 CUDA_VISIBLE_DEVICES=0 python train.py \
-    --cfg configs/kmelon/latent_64/pce_finetune_v25_calFix_weakSoftvol_l64_large_maxmean_noAug_archMatch_e100_seed11_ftonly.json
+    --cfg configs/kmelon/latent_32/finetune.json
 ```
 
 ### Inference: single-frame baseline vs. SCoRe
@@ -100,17 +102,18 @@ CUDA_VISIBLE_DEVICES=0 python train.py \
 ```bash
 # CoRe++ baseline (no fusion)
 python temporal/test.py \
-    --cfg <finetune_run>/pce_finetune_..._e100_seed11_ftonly.json \
+    --cfg configs/kmelon/latent_32/finetune.json \
     --checkpoint <finetune_run>/logs/checkpoints/best_model.pt \
     --no_temporal
 
-# SCoRe (Stage 3: EMA[z] + M[pc1, pc2] at τ = 3.5 days)
+# SCoRe (Stage 3: EMA over the latent + monotone clamp on PC1)
 python temporal/test.py \
-    --cfg configs/kmelon/latent_64/temporal_archMatch_l64_large_maxmean_ema_pc1_monotone_tau3.5_seed11_ftonly.json \
-    --checkpoint <finetune_run>/logs/checkpoints/best_model.pt
+    --cfg configs/kmelon/latent_32/temporal.json \
+    --checkpoint <finetune_run>/logs/checkpoints/best_model.pt \
+    --fusion_mode ema_max --ema_tau 3.0
 ```
 
-The PC1/PC2 growth axes are computed once per encoder by an offline PCA on within-fruit consecutive-frame Δz (see `scripts/`), then reused at inference.
+The PC1 growth axis is computed once per encoder by an offline PCA on within-fruit consecutive-frame Δz (see `scripts/`), then reused at inference. The fusion flags are required, since `--fusion_mode` defaults to a different module; [`configs/kmelon/latent_32/README.md`](configs/kmelon/latent_32/README.md) explains them.
 
 ---
 
@@ -124,7 +127,7 @@ The PC1/PC2 growth axes are computed once per encoder by an offline PCA on withi
 | 2026 | B | *Alchanggul* | 11 Mar – 16 Apr 2026 | 69 | `B1`–`B69` |
 | 2026 | C | *Alchanggul* | 11 Mar – 16 Apr 2026 | 80 | `C1`–`C80` |
 
-Split: 102 train / 28 validation / 80 *Alchanggul* test (greenhouse C, April 2026 last-frame window). Ground truth is a per-fruit multi-view 3D reconstruction at harvest (last frame) and a per-fruit-corrected ellipsoid volume from caliper height/width at every session (intermediate frames).
+Split: 102 train / 28 validation / 80 *Alchanggul* test (greenhouse C, April 2026 last-frame window). Ground truth is a per-fruit multi-view 3D reconstruction at harvest (last frame); intermediate frames carry a per-fruit-corrected caliper ellipsoid volume as a surrogate reference.
 
 **Download: [`Sungjay/3DKoreanMelon`](https://huggingface.co/datasets/Sungjay/3DKoreanMelon)** · DOI [10.57967/hf/9982](https://doi.org/10.57967/hf/9982) · CC BY 4.0 · ~334 MB
 
@@ -133,23 +136,6 @@ hf download Sungjay/3DKoreanMelon --repo-type dataset --local-dir data/3DKoreanM
 ```
 
 This code reads that layout directly, with no conversion step. See [`DOCS/00_PUBLIC_DATASET.md`](DOCS/00_PUBLIC_DATASET.md) for the run command and the trained weights.
-
----
-
-## Documentation
-
-| Doc | Contents |
-|---|---|
-| [`DOCS/00_PUBLIC_DATASET.md`](DOCS/00_PUBLIC_DATASET.md) | Running on the published dataset |
-| [`DOCS/01_DATA_PREPARATION.md`](DOCS/01_DATA_PREPARATION.md) | Dataset layout, splits, metadata CSV |
-| [`DOCS/02_DEEPSDF_TRAINING.md`](DOCS/02_DEEPSDF_TRAINING.md) | DeepSDF decoder workflow |
-| [`DOCS/03_ENCODER_TRAINING.md`](DOCS/03_ENCODER_TRAINING.md) | Encoder pretrain & fine-tune |
-| [`DOCS/04_EVALUATION.md`](DOCS/04_EVALUATION.md) | Metrics, baselines, ablations |
-| [`DOCS/05_VISUALIZATION.md`](DOCS/05_VISUALIZATION.md) | Mesh / pointcloud visualization |
-| [`DOCS/06_AUTOMATION.md`](DOCS/06_AUTOMATION.md) | Sweep / batch helpers |
-| [`DOCS/TROUBLESHOOTING.md`](DOCS/TROUBLESHOOTING.md) | Common errors |
-
-Some entries under `DOCS/` were written during the earlier Kalman-fusion design (see `DOCS/MIGRATION_GUIDE.md`) and are kept for historical reference.
 
 ---
 
