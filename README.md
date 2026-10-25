@@ -13,11 +13,9 @@ A robotic platform revisits each fruit every 2 to 3 days. Each visit produces on
 ![Three-stage pipeline. Stage 1 trains the DeepSDF decoder on per-fruit ground-truth meshes; Stage 2 trains the point cloud encoder against the Stage 1 per-fruit latents; Stage 3 (inference only) feeds each session's encoder output z_t together with the running fused state μ_{t-1} through the temporal latent fusion module, and decodes the fused latent μ_t into the predicted 3D shape completion.](assets/figures/pipeline_stages.png)
 
 - **Time-aware EMA** over the full latent — irregular session intervals are absorbed by weighting each new observation by how long it has been since the last visit.
-- **Hard monotone clamp** on the leading principal direction of the within-fruit consecutive-frame latent change Δz = z_{t+1} − z_t, encoding the prior that fruit volume does not decrease before harvest.
-- **Frozen DeepSDF decoder** — only the encoder is trained. Stage 3 (fusion) is inference time only and learns nothing.
+- **Hard monotone clamp** on the leading principal direction of the within-fruit consecutive-frame latent change Δz = z_{t+1} − z_t, encoding a growth prior. This constrains a latent coordinate, not decoded volume; the other coordinates continue to update with new observations.
+- **Frozen DeepSDF decoder during encoder training** — the shape prior is learned first, then held fixed. Stage 3 (fusion) is inference time only and learns nothing.
 - **Weak supervision** at fine-tuning via an **occupancy volume** V_occ = Σ σ(−SDF/T) · v_voxel, supervised against a per-fruit-corrected ellipsoid GT V_ell on intermediate frames.
-
-![Temporal latent fusion module (Stage 3): (a) an offline PCA pre-pass identifies the leading growth axis v_pc1 from per-fruit consecutive-frame latent differences Δz; (b) the time-aware EMA smooths z_t into μ̃_t; (c) the growth-wise monotone clamp projects μ̃_t onto that axis and enforces a running maximum against the prior s_{t-1}; the clamped projection is recomposed with the orthogonal residual to form μ_t.](assets/figures/fusion_module.png)
 
 ---
 
@@ -62,17 +60,26 @@ Stage 3 is parameter-free. The same fine-tuned encoder checkpoint produces both 
 
 | Method | RMSE (mL) ↓ | MAPE (%) ↓ | F1 @ 5 mm (%) ↑ | d_CD (mm) ↓ |
 |---|---:|---:|---:|---:|
-| 2D De-occlusion + Reg (conventional image-based reference) | 95.0 | 31.21 | — | — |
-| T-CoRe (Magistri et al. 2024) | 130.4 | 34.88 | 60.97 | 4.71 |
+| 2D De-occlusion + Reg (conventional image-based reference) | 94.03 | 31.95 | — | — |
+| T-CoRe (Magistri et al. 2024) | 130.44 | 34.65 | 61.13 | 4.76 |
 | CoRe++ (PCE-large, D = 32) | 87.4 | 24.93 | 66.13 | 4.47 |
 | **SCoRe (this work)** | **50.6** | **15.19** | **83.00** | **2.95** |
 | DeepSDF decoder oracle, latent optimised against the GT mesh | 8.7 | 1.84 | 98.99 | 1.22 |
 
-Under heavy 60 % occlusion of the last frame, SCoRe holds last-frame RMSE at 70.3 mL
-(CoRe++ 116.7 mL) and F1 @ 5 mm at 77.5 %. The decoder oracle auto-decodes the
-ground-truth mesh and is not a deployable method.
+With 60% spatial point removal at every final observation and at randomly selected
+earlier observations (five temporal patterns), SCoRe obtains final-frame RMSE
+85.21 ± 2.11 mL versus 115.68 mL for the single-frame baseline. The ± value is the
+sample standard deviation across patterns. The decoder oracle optimizes a latent
+against the reference geometry and is a reconstruction diagnostic.
 
-![Per-fruit mesh time series for a representative test fruit across the growing season. Rows: partial PCD input, CoRe++ (PCE) single-frame mesh, SCoRe sequential mesh. The PCE row jitters frame-to-frame on the same dates that SCoRe smooths into a nearly monotone growth sequence; the last-day column is error-colored against the 3D reconstruction GT.](assets/figures/mesh_timeseries.png)
+Volume-only EMA followed by a running maximum achieves 52.58 mL at the shared
+τ = 3 days, compared with SCoRe's 50.64 mL. Scalar filtering leaves the single-frame
+mesh unchanged; SCoRe updates the shape itself (F1 66.13% → 83.00%).
+
+The downloadable [reference analyses](DOCS/00_PUBLIC_DATASET.md#paper-reference-analyses)
+include scalar baselines, paired fruit bootstrap intervals, occlusion patterns,
+three fine-tuning seeds, and extraction-grid sensitivity. These use archived
+predictions; the public point-cloud inference command is documented separately.
 
 ---
 
@@ -99,21 +106,19 @@ CUDA_VISIBLE_DEVICES=0 python train.py \
 
 ### Inference: single-frame baseline vs. SCoRe
 
-```bash
-# CoRe++ baseline (no fusion)
-python temporal/test.py \
-    --cfg configs/kmelon/latent_32/finetune.json \
-    --checkpoint <finetune_run>/logs/checkpoints/best_model.pt \
-    --no_temporal
+Download the public dataset and v1.1 weights as described in
+[`DOCS/00_PUBLIC_DATASET.md`](DOCS/00_PUBLIC_DATASET.md), then run:
 
-# SCoRe (Stage 3: EMA over the latent + monotone clamp on PC1)
-python temporal/test.py \
-    --cfg configs/kmelon/latent_32/temporal.json \
-    --checkpoint <finetune_run>/logs/checkpoints/best_model.pt \
-    --fusion_mode ema_max --ema_tau 3.0
+```bash
+# CoRe++ baseline, all eligible visits (no fusion)
+python scripts/evaluate_public.py --single-frame
+
+# SCoRe: full-latent EMA and PC1 clamp, τ = 3 days
+python scripts/evaluate_public.py
 ```
 
-The PC1 growth axis is computed once per encoder by an offline PCA on within-fruit consecutive-frame Δz (see `scripts/`), then reused at inference. The fusion flags are required, since `--fusion_mode` defaults to a different module; [`configs/kmelon/latent_32/README.md`](configs/kmelon/latent_32/README.md) explains them.
+The PC1 growth axis is computed once per encoder by an offline PCA on within-fruit consecutive-frame Δz (see `scripts/`), then reused at inference. The wrapper supplies `--fusion_mode ema_max --ema_tau 3.0`, since direct
+`temporal/test.py` calls otherwise default to a different module; [`configs/kmelon/latent_32/README.md`](configs/kmelon/latent_32/README.md) explains them.
 
 ---
 
@@ -127,7 +132,12 @@ The PC1 growth axis is computed once per encoder by an offline PCA on within-fru
 | 2026 | B | *Alchanggul* | 11 Mar – 16 Apr 2026 | 69 | `B1`–`B69` |
 | 2026 | C | *Alchanggul* | 11 Mar – 16 Apr 2026 | 80 | `C1`–`C80` |
 
-Split: 102 train / 28 validation / 80 *Alchanggul* test (greenhouse C, April 2026 last-frame window). Ground truth is a per-fruit multi-view 3D reconstruction at harvest (last frame); intermediate frames carry a per-fruit-corrected caliper ellipsoid volume as a surrogate reference.
+Split by fruit: 102 train / 28 validation / 80 *Alchanggul* test (greenhouse C). Ground truth is a per-fruit multi-view 3D reconstruction at harvest (last frame); intermediate frames carry a per-fruit-corrected caliper ellipsoid volume as a surrogate reference.
+
+After point-count, reference-availability, and sequence-length filtering, the paper
+evaluates 79 test fruits (79 final and 976 intermediate observations) and 18 validation
+fruits. The released point clouds retain all 2,738 observations, including those below
+the 300-point threshold; 2,513 satisfy that threshold.
 
 **Download: [`Sungjay/3DKoreanMelon`](https://huggingface.co/datasets/Sungjay/3DKoreanMelon)** · DOI [10.57967/hf/9982](https://doi.org/10.57967/hf/9982) · CC BY 4.0 · ~334 MB
 

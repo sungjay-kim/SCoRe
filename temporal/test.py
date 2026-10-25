@@ -34,11 +34,11 @@ class SimpleFusion(torch.nn.Module):
     Modes:
       ema             — α·z_t + (1-α)·μ_{t-1}   on FULL latent (uniform).
       ema_max         — full-latent EMA followed by hard PC1 monotone clamp
-                        (hybrid; kept for backward compatibility).
+                        (the reference SCoRe method).
       max_only        — no EMA, hard PC1 monotone clamp only.
       pc1_only_ema    — EMA only on PC1 scalar; shape = z_t's orthogonal subspace.
       pc1_only_ema_max — PC1 scalar EMA + monotone clamp; shape = z_t's
-                         orthogonal subspace. CLEAN PC1-decomposed final method.
+                         orthogonal subspace (an alternative ablation).
 
     α (EMA weight) options:
       - Fixed α (use `alpha`)

@@ -1,0 +1,6 @@
+{
+  "repo_id": "Sungjay/3DKoreanMelon",
+  "repo_type": "dataset",
+  "revision": "a1022a1b63aeae1151c5da6f5383cf73d5f8e658",
+  "manifest": "benchmarks/score_reference/manifest.json"
+}

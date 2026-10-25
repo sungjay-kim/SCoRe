@@ -75,11 +75,14 @@ model that produces different numbers without complaining.
 
 Expected on load: 210 fruits, 2,738 frames across the three splits (1,212 train, 347
 validation, 1,179 test), and 2,312 caliper sessions read from `sessions.csv`. Evaluation
-covers the 79 test fruits whose final observation passes the 300-point filter, and should
+uses observations with at least 300 points and available volume references (caliper
+proxies at intermediate visits; harvest geometry at the final visit), retaining sequences
+with at least three eligible visits (79 test fruits; 79 final and 976 intermediate
+observations), and should
 report chamfer distance 2.97 mm, F1 at 5 mm 82.7 %, volume RMSE 52.3 mL, MAPE 15.4 %.
 
 The paper reports 2.95 mm, 83.0 %, 50.6 mL and 15.2 % for this same model and checkpoint.
-The gap is the harvest volume reference, not the model: `harvest_volume_ml` in the release
+The checkpoint is unchanged. The volume gap is mainly due to the harvest reference: `harvest_volume_ml` in the release
 is recomputed as the convex hull of the released reference scan, which sits a median 0.7 %
 above the screened Poisson mesh volume the paper evaluated against. Substituting that one
 reference accounts for 1.2 mL of the 1.7 mL RMSE difference; the remaining 0.5 mL is the
@@ -120,5 +123,48 @@ The script reads each `pointcloud.ply`, estimates and orients normals itself, an
 ## Scripts that still expect the working tree
 
 `scripts/` and `analysis/` were written against the internal layout and address
-`<id>/laser/fruit.ply` directly. They are analysis utilities rather than part of the
-training or evaluation path, and have not been ported.
+`<id>/laser/fruit.ply` directly. Many historical utilities still require that layout. The portable
+`scripts/reference/` analyses described below use the public benchmark files.
+
+
+## Paper reference analyses
+
+The dataset additionally supplies `metadata/paper_evaluation.csv` and
+`benchmarks/score_reference/`. The former maps public IDs to the exact paper cohort
+and original screened-Poisson references. It does not overwrite the released convex-hull
+values or change the inference loader. The latter contains archived predictions,
+fixed occlusion masks, expected summaries, and a checksum manifest.
+
+To rerun the published numerical analyses on a CPU (Python 3.10+, NumPy, pandas,
+SciPy with `scipy.optimize.isotonic_regression`):
+
+```bash
+python scripts/reference/verify_bundle.py
+python scripts/reference/analyze_existing_predictions.py
+python scripts/reference/run_statistical_uncertainty.py
+python scripts/reference/summarize_robustness.py
+```
+
+Outputs go to `runs/reference_analysis/`. The first analysis recomputes volume-space
+EMA/max/isotonic/logistic baselines, validation-only scalar-τ selection and linear
+calibration, paired fruit bootstrap intervals, size strata, and volume decreases.
+The second recomputes paired ablation and validation-τ intervals. The third recomputes
+five random-history occlusion patterns (final frame always occluded), their fruit
+bootstrap intervals, and the three fine-tuning-seed summaries. These commands analyze
+saved model predictions; they do not rerun encoder training or neural inference.
+
+For new inference with the released checkpoint, a preset wrapper supplies the required
+fusion flags and runs from the repository root:
+
+```bash
+python scripts/evaluate_public.py
+python scripts/evaluate_public.py --single-frame
+```
+
+The preset uses the existing public-layout references and the live-inference results
+stated above. `--dry-run` shows the command; additional `temporal/test.py` arguments
+can be appended. That script's built-in occlusion flag remains final-frame-only;
+random-history results and their fixed masks are in the reference bundle.
+
+The reference release is pinned in `scripts/reference/dataset_revision.json`. Use its
+`revision` with `hf download --revision` to retrieve the exact benchmark files.
